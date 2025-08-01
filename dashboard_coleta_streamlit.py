@@ -8,7 +8,7 @@ import io
 
 # Configuração da página
 st.set_page_config(
-    page_title="Acompanhamento de Coletas",
+    page_title="Acompanhamento de Coleta",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -101,10 +101,15 @@ def create_pie_chart(df, col, title):
     fig.update_layout(height=400)
     return fig
 
-st.title("📊 Acompanhamento de Coletas")
+
 st.markdown("---")
 
 uploaded_file = st.file_uploader("Faça upload do arquivo CSV ou Excel", type=["csv", "xls", "xlsx"])
+
+st.markdown("""
+    <h1 style='text-align: center; color: white; font-size: 48px;'>📊 Acompanhamento de Coletas</h1>
+    <hr style='border: 1px solid #444;'>
+""", unsafe_allow_html=True)
 df = load_data(uploaded_file)
 
 if df.empty:
@@ -147,11 +152,11 @@ st.markdown("---")
 col1, col2 = st.columns(2)
 with col1:
     if "MotivoDevolucao" in df_filtered.columns:
-        st.plotly_chart(create_bar_chart(df_filtered, "MotivoDevolucao", "Top 10 Motivos de Devolução"), use_container_width=True)
+        st.plotly_chart(create_bar_chart(df_filtered, "MotivoDevolucao", "Devolução"), use_container_width=True)
 
 with col2:
     if "Status" in df_filtered.columns:
-        st.plotly_chart(create_pie_chart(df_filtered, "Status", "Status dos Pedidos"), use_container_width=True)
+        st.plotly_chart(create_pie_chart(df_filtered, "Status", "Status das Devoluções"), use_container_width=True)
 
 st.subheader("📄 Dados Filtrados")
 colunas_existentes = [col for col in COLUNAS_DESEJADAS if col in df_filtered.columns]
