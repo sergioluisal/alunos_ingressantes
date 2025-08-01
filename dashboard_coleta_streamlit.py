@@ -8,7 +8,7 @@ import io
 
 # Configuração da página
 st.set_page_config(
-    page_title="Acompanhamento de Coleta",
+    page_title="Acompanhamento de Suprimentos",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
