@@ -1,188 +1,126 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
-import numpy as np
-from datetime import datetime
-import io
+import requests
+import os
+import re
+from PyPDF2 import PdfMerger
+from zipfile import ZipFile
+from io import BytesIO
 
-# Configuração da página
-st.set_page_config(
-    page_title="Acompanhamento de Suprimentos",
-    page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# ---------------- CONFIGURAÇÃO ----------------
+COLUNA_NOME = 'Nome'
 
-COLUNAS_DESEJADAS = [
-    'MotivoDevolucao', 'Status', 'IdSolicitacaoRetirada', 'NumeroSerie',
-    'CodigoModelo', 'PedidoDrl', 'OrdemColeta', 'Endereco', 'Complemento',
-    'Cidade', 'Uf', 'DataSolicitacao', 'Coleta', 'Finalizado'
+COLUNAS_DOCS = [
+    '1. Formulário de matrícula de aluno ingressante',
+    '2. Carta de aceite definitivo',
+    '3. Formulário de matrícula em disciplinas',
+    '4. Recibo do depósito da taxa de inscrição',
+    '5. Carta da instituição de origem, permitindo o afastamento total/parcial do candidato para cursar o Programa de Pós-Graduação (quando vinculado a alguma instituição/serviço) OU Carta informando a ausência de vínculo empregatício',
+    '9. Carta da instituição de origem com liberação parcial ou total / ou / carta de ausência de vínculo empregatício',
+    '6. Certidão de nascimento ou casamento',
+    '4. Cédula de identidade (RG) ou Registro Nacional Migratório (RNM)',
+    '5. CPF (caso o RG não possua o número)',
+    '7. Comprovante de quitação eleitoral',
+    '8. Certificado de reservista',
+    '10. Diploma da Graduação',
+    '11. Histórico Escolar do Curso de Graduação',
+    '12. Diploma de Mestre (se houver)',
+    '13. Histórico Escolar do Mestrado',
+    '14. Atestado de conclusão de curso',
+    '15. Se estrangeiro, passaporte e visto'
 ]
 
-@st.cache_data
-def load_data(uploaded_file):
-    if uploaded_file is None:
-        return pd.DataFrame()
+PASTA_SAIDA = "Pacotes_Matricula"
 
+# ---------------- FUNÇÕES ----------------
+def converter_link_drive(url):
+    if pd.isna(url) or 'drive.google.com' not in str(url):
+        return None
     try:
-        file_extension = uploaded_file.name.split(".")[-1].lower()
-        if file_extension == "csv":
-            encodings = ["utf-8", "latin-1", "iso-8859-1", "cp1252"]
-            df = None
-            for encoding in encodings:
+        file_id = re.search(r'/d/([a-zA-Z0-9-_]+)', str(url)).group(1)
+        return f'https://drive.google.com/uc?export=download&id={file_id}'
+    except:
+        return None
+
+def processar_matriculas(df):
+    os.makedirs(PASTA_SAIDA, exist_ok=True)
+
+    for index, row in df.iterrows():
+        aluno = str(row[COLUNA_NOME]).strip().replace(" ", "_")
+        merger = PdfMerger()
+        arquivos_temp = []
+
+        for i, col in enumerate(COLUNAS_DOCS):
+            if col not in df.columns:
+                continue
+
+            url_download = converter_link_drive(row[col])
+
+            if url_download:
                 try:
-                    df = pd.read_csv(uploaded_file, encoding=encoding, sep=";")
-                    break
+                    r = requests.get(url_download, timeout=20)
+                    temp_pdf = f"temp_{index}_{i}.pdf"
+                    with open(temp_pdf, "wb") as f:
+                        f.write(r.content)
+
+                    merger.append(temp_pdf)
+                    arquivos_temp.append(temp_pdf)
                 except:
-                    uploaded_file.seek(0)
-            if df is None:
-                raise Exception("Não foi possível ler o CSV com os encodings testados.")
-        elif file_extension in ["xls", "xlsx"]:
-            df = pd.read_excel(uploaded_file)
+                    pass
+
+        if arquivos_temp:
+            merger.write(f"{PASTA_SAIDA}/{aluno}_Matricula_Completa.pdf")
+            merger.close()
+
+        for f in arquivos_temp:
+            if os.path.exists(f):
+                os.remove(f)
+
+def criar_zip_em_memoria():
+    buffer = BytesIO()
+    with ZipFile(buffer, "w") as zipf:
+        for pasta, _, arquivos in os.walk(PASTA_SAIDA):
+            for arquivo in arquivos:
+                caminho = os.path.join(pasta, arquivo)
+                zipf.write(caminho, arcname=arquivo)
+    buffer.seek(0)
+    return buffer
+
+# ---------------- INTERFACE STREAMLIT ----------------
+st.set_page_config(page_title="Consolidação de Matrículas", layout="centered")
+
+st.title("📄 Consolidação de Documentos de Matrícula")
+st.write("Faça upload da planilha e gere um **ZIP único** com todos os PDFs consolidados.")
+
+arquivo = st.file_uploader(
+    "📤 Envie a planilha (.xlsx ou .csv)",
+    type=["xlsx", "csv"]
+)
+
+if arquivo:
+    try:
+        if arquivo.name.endswith(".xlsx"):
+            df = pd.read_excel(arquivo)
         else:
-            st.error("Formato de arquivo não suportado.")
-            return pd.DataFrame()
+            df = pd.read_csv(arquivo)
 
-        if "DataSolicitacao" in df.columns:
-            df["DataSolicitacao"] = pd.to_datetime(df["DataSolicitacao"], errors='coerce', dayfirst=True)
+        df.columns = [c.strip().replace('\n', ' ') for c in df.columns]
 
-        if "Finalizado" in df.columns:
-            df["Finalizado"] = pd.to_datetime(df["Finalizado"], errors='coerce')
+        st.success("Planilha carregada com sucesso!")
 
-        df = df.fillna("Não informado")
-        return df
+        if st.button("⚙️ Processar documentos"):
+            with st.spinner("Processando documentos..."):
+                processar_matriculas(df)
+                zip_buffer = criar_zip_em_memoria()
+
+            st.success("Processamento concluído!")
+
+            st.download_button(
+                label="⬇️ Baixar ZIP com matrículas",
+                data=zip_buffer,
+                file_name="Pacotes_Matricula.zip",
+                mime="application/zip"
+            )
+
     except Exception as e:
-        st.error(f"Erro ao carregar dados: {e}")
-        return pd.DataFrame()
-
-def safe_percentage(numerator, denominator):
-    if denominator == 0 or pd.isna(denominator) or pd.isna(numerator):
-        return 0
-    return (numerator / denominator) * 100
-
-def calculate_metrics(df):
-    total_solicitacoes = len(df)
-
-    if "Finalizado" in df.columns:
-        finalizadas = df[~df["Finalizado"].isin(["Não informado", "", None])].shape[0]
-    else:
-        finalizadas = 0
-
-    pendentes = total_solicitacoes - finalizadas
-    taxa_finalizacao = safe_percentage(finalizadas, total_solicitacoes)
-    return {
-        "total_solicitacoes": total_solicitacoes,
-        "coletas_finalizadas": finalizadas,
-        "pendentes": pendentes,
-        "taxa_finalizacao": taxa_finalizacao
-    }
-
-def create_bar_chart(df, x_col, title):
-    counts = df[x_col].value_counts().head(10)
-    fig = px.bar(
-        x=counts.index,
-        y=counts.values,
-        title=title,
-        labels={'x': x_col, 'y': 'Quantidade'},
-        color_discrete_sequence=px.colors.qualitative.Set3
-    )
-    fig.update_layout(height=400, showlegend=False)
-    return fig
-
-def create_pie_chart(df, col, title):
-    counts = df[col].value_counts()
-    fig = px.pie(
-        values=counts.values,
-        names=counts.index,
-        title=title,
-        color_discrete_sequence=px.colors.qualitative.Set3
-    )
-    fig.update_layout(height=400)
-    return fig
-
-
-st.markdown("---")
-
-uploaded_file = st.file_uploader("Faça upload do arquivo CSV ou Excel", type=["csv", "xls", "xlsx"])
-
-st.markdown("""
-    <h1 style='text-align: center; color: white; font-size: 48px;'>📊 Acompanhamento de Coletas</h1>
-    <hr style='border: 1px solid #444;'>
-""", unsafe_allow_html=True)
-df = load_data(uploaded_file)
-
-if df.empty:
-    st.info("Por favor, envie um arquivo para começar.")
-    st.stop()
-
-st.sidebar.header("🔍 Filtros")
-available_columns = df.columns.tolist()
-df_filtered = df.copy()
-
-for col in COLUNAS_DESEJADAS:
-    if col in df_filtered.columns and df_filtered[col].nunique() < 100:
-        options = ["Todos"] + sorted(df_filtered[col].unique().astype(str).tolist())
-        selected = st.sidebar.selectbox(f"{col}:", options)
-        if selected != "Todos":
-            df_filtered = df_filtered[df_filtered[col].astype(str) == selected]
-
-if "DataSolicitacao" in df_filtered.columns:
-    min_date = df_filtered["DataSolicitacao"].min().date()
-    max_date = df_filtered["DataSolicitacao"].max().date()
-    start_date, end_date = st.sidebar.date_input("Período de Solicitação:", (min_date, max_date))
-    df_filtered = df_filtered[
-        (df_filtered["DataSolicitacao"].dt.date >= start_date) &
-        (df_filtered["DataSolicitacao"].dt.date <= end_date)
-    ]
-
-metrics = calculate_metrics(df_filtered)
-col1, col2, col3, col4 = st.columns(4)
-with col1:
-    st.metric("Total de Solicitações", metrics["total_solicitacoes"])
-with col2:
-    st.metric("Coletas Finalizadas", metrics["coletas_finalizadas"])
-with col3:
-    st.metric("Pendentes", metrics["pendentes"])
-with col4:
-    st.metric("Taxa de Finalização", f"{metrics['taxa_finalizacao']:.1f}%")
-
-st.markdown("---")
-
-col1, col2 = st.columns(2)
-with col1:
-    if "MotivoDevolucao" in df_filtered.columns:
-        st.plotly_chart(create_bar_chart(df_filtered, "MotivoDevolucao", "Devolução"), use_container_width=True)
-
-with col2:
-    if "Status" in df_filtered.columns:
-        st.plotly_chart(create_pie_chart(df_filtered, "Status", "Status das Devoluções"), use_container_width=True)
-
-st.subheader("📄 Dados Filtrados")
-colunas_existentes = [col for col in COLUNAS_DESEJADAS if col in df_filtered.columns]
-st.dataframe(df_filtered[colunas_existentes], use_container_width=True)
-
-st.subheader("📥 Exportar Dados")
-csv = df_filtered[colunas_existentes].to_csv(index=False, sep=";").encode("utf-8")
-st.download_button(
-    label="Download CSV",
-    data=csv,
-    file_name=f"dados_filtrados_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-    mime="text/csv"
-)
-
-excel_buffer = io.BytesIO()
-df_filtered[colunas_existentes].to_excel(excel_buffer, index=False, engine="openpyxl")
-excel_buffer.seek(0)
-st.download_button(
-    label="Download Excel",
-    data=excel_buffer,
-    file_name=f"dados_filtrados_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-)
-
-with st.expander("ℹ️ Sobre os dados"):
-    st.write("**Colunas presentes:**")
-    for col in colunas_existentes:
-        st.write(f"- {col}")
-    st.write(f"**Total de registros:** {len(df_filtered)}")
+        st.error(f"Erro ao processar o arquivo: {e}")
